@@ -1,0 +1,12 @@
+Flask
+gunicorn
+python-dotenv
+PyMySQL
+DBUtils
+Flask-Bcrypt
+Flask-JWT-Extended
+Celery
+redis
+requests
+PyYAML
+Flask-Mail
