@@ -265,8 +265,8 @@ def update_system_docker(username, value_container, container_name, port, domain
         if conn:
             conn.close()
 
-@celery_app.task(bind=True)
-def docker_start_stop(self, result_action, folder_name, project_path, docker_project_name, cmd, username, log_id):
+@celery_app.task()
+def docker_start_stop(result_action, folder_name, project_path, docker_project_name, cmd, username, log_id):
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
@@ -309,8 +309,8 @@ def docker_start_stop(self, result_action, folder_name, project_path, docker_pro
             conn.close()
 
 
-@celery_app.task(bind=True)
-def docker_delstack(self, project_path, docker_project_name, folder_name, username, user_id, container_list, container_value, container_user_data, log_id):
+@celery_app.task()
+def docker_delstack(project_path, docker_project_name, folder_name, username, user_id, container_list, container_value, container_user_data, log_id):
     msg_npm = "- None -"
     npm_logs = []
     conn = None
@@ -386,8 +386,8 @@ def docker_delstack(self, project_path, docker_project_name, folder_name, userna
         if conn:
             conn.close()
 
-@celery_app.task(bind=True)
-def docker_deluser(self, username, container_user_data, db_name, all_docker_logs, id_users, username_token, log_id):
+@celery_app.task()
+def docker_deluser(username, container_user_data, db_name, all_docker_logs, id_users, username_token, log_id):
     processed_paths = set()
     n = 0
     conn = None
@@ -456,8 +456,8 @@ def docker_deluser(self, username, container_user_data, db_name, all_docker_logs
         if conn:
             conn.close()
 
-@celery_app.task(bind=True)
-def docker_deploy(self, full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, value_container):
+@celery_app.task()
+def docker_deploy(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, value_container):
     try:
         is_run , logs = run_docker_project(full_path_floder, docker_project_name, action)
         if not is_run:
@@ -500,8 +500,8 @@ def docker_deploy(self, full_path, full_path_floder, docker_project_name, action
             pass
         return {"error": f"Deployment Error: {str(e)}"}
 
-@celery_app.task(bind=True)
-def docker_update(self, new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, npm_id, value_container):
+@celery_app.task()
+def docker_update(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, npm_id, value_container):
     try:
         is_run , logs = run_docker_project(new_full_path_floder,docker_project_name, action)
         if not is_run:
