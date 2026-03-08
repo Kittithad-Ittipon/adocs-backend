@@ -171,6 +171,7 @@ def nginx_delete_proxy(npm_id):
         return False, f"Connection Error: {str(e)}"
 
 # Run Docker Compose Project with subprocess and capture logs
+def run_docker_project(project_path, docker_project_name, action):
     down_log_content = (
         f"------------[DOWN LOGS]------------ \n\n"
         f"[CMD]:\n  - None - \n\n\n"
