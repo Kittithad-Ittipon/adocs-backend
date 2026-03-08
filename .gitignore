@@ -4,3 +4,8 @@
 */*.pyc
 */.env
 */.vscode
+.venv
+.env
+.vscode
+__pycache__/
+*.pyc
