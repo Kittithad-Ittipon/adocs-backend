@@ -102,47 +102,6 @@ def get_npm_token():
         return NPM_TOKEN
     return None
 
-# Function to add NPM proxy host
-def nginx_add_proxy(domain, container_name, port, protocol):
-    token = get_npm_token()
-    if not token:
-        return False, "NPM Auth Failed"
-
-    url = f"{os.getenv('NPM_URL')}/api/nginx/proxy-hosts"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "domain_names": [domain],
-        "forward_scheme": protocol,
-        "forward_host": container_name,
-        "forward_port": int(port),
-        "access_list_id": 0,
-        "certificate_id": 3,
-        "ssl_forced": True,
-        "caching_enabled": False,
-        "block_exploits": True,
-        "advanced_config": "",
-        "meta": {},
-        "allow_websocket_upgrade": True,
-        "http2_support": True,
-        "hsts_enabled": True,
-        "hsts_subdomains": False
-    }
-
-    try:
-        response = requests.post(url, json=payload, headers=headers, verify=False, timeout=30)
-        
-        if response.status_code == 201:
-            npm_id = response.json().get("id")
-            return True, npm_id
-        else:
-            return False, response.json().get("error", {}).get("message", "Unknown Error")
-    except Exception as e:
-        return False, str(e)
-
 # Function to update NPM proxy host
 def nginx_update_proxy(npm_id, domain, container_name, port, protocol):
     token = get_npm_token()
@@ -181,31 +140,6 @@ def nginx_update_proxy(npm_id, domain, container_name, port, protocol):
     except Exception as e:
         return False, f"Connection Error: {str(e)}"
 
-# Function to delete NPM proxy host
-def nginx_delete_proxy(npm_id):
-    if not npm_id:
-        return True, "No NPM ID"
-
-    token = get_npm_token()
-    if not token: 
-        return False, "NPM Auth Failed"
-
-    url = f"{os.getenv('NPM_URL')}/api/nginx/proxy-hosts/{npm_id}"
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
-
-    try:
-        response = requests.delete(url, headers=headers, verify=False, timeout=30)
-        
-        if response.status_code in [200, 204]:
-            return True, "Proxy Host Deleted From NPM"
-        else:
-            error_msg = response.json().get("error", {}).get("message", "Unknown Error")
-            return False, f"NPM Delete Failed: {error_msg}"
-    except Exception as e:
-        return False, f"Connection Error: {str(e)}"
-
 # Function to unzip uploaded file
 def unzip_here(zip_path, target_dir):
     try:
@@ -240,9 +174,11 @@ def unzip_here(zip_path, target_dir):
     except Exception as e:
         print(f"Unzip Error: {e}")
 
+
 # Function to validate docker-compose.yml file and check user quota before deployment
 def validate_docker_compose(project_path, username, container_name):
     conn = None
+    img_names_dict = {}
     try:
         compose_file = None
         conn = get_db_connection()
@@ -258,16 +194,16 @@ def validate_docker_compose(project_path, username, container_name):
                 break
             
         if not compose_file:
-            return  "docker-compose.yml file not found" , None , None
+            return  "docker-compose.yml file not found" , None , None, None
 
         try:
             with open(compose_file, "r") as f:
                 compose = yaml.safe_load(f)
         except Exception as e:
-            return f"docker-compose.yml Syntax Error: {str(e)}" , None , None
+            return f"docker-compose.yml Syntax Error: {str(e)}" , None , None, None
 
         if "services" not in compose:
-            return "No Services Defined in docker-compose.yml" , None , None
+            return "No Services Defined in docker-compose.yml" , None , None, None
         
         services = compose["services"]
 
@@ -284,7 +220,7 @@ def validate_docker_compose(project_path, username, container_name):
         predicted_usage = (current_usage - old_stack_count) + value_container
 
         if int(predicted_usage) > int(max_containers):
-            return f"Quota Exceeded! You have {current_usage}. This stack is {value_container}. Total would be {predicted_usage} (Max: {max_containers})" , None , None
+            return f"Quota Exceeded! You have {current_usage}. This stack is {value_container}. Total would be {predicted_usage} (Max: {max_containers})" , None , None, None
 
         if len(services) == 0:
             return "No Service Found"
@@ -295,16 +231,35 @@ def validate_docker_compose(project_path, username, container_name):
             if service_name == container_name:
                 main_service_found = True
 
+            img_name = None
+
+            if "image" in service:
+                img_name = service["image"]
+            elif "build" in service and isinstance(service["build"], dict) and "dockerfile_inline" in service["build"]:
+                dockerfile_inline = service["build"]["dockerfile_inline"]
+                for line in dockerfile_inline.splitlines():
+                    line = line.strip()
+                    if line.upper().startswith("FROM"):
+                        img_name = line.split()[1]
+                        break
+            else:
+                return f"Service '{service_name}' must have an 'image' or 'build' with 'dockerfile_inline' defined." , None , None, None
+
+            if not img_name:
+                return f"Service '{service_name}' Dockerfile_inline must contain FROM !", None, None, None
+
+            img_names_dict[service_name] = img_name
+
             if "container_name" in service:
-                return f"service '{service_name}' cannot define container_name" , None , None
+                return f"service '{service_name}' cannot define container_name" , None , None, None
 
             service["container_name"] = f"{username}_{container_name}_{service_name}"
 
             if "image" not in service and "build" not in service:
-                return f"Service '{service_name}' Must Have Either 'image' or 'build' Defined." , None , None
+                return f"Service '{service_name}' Must Have Either 'image' or 'build' Defined." , None , None, None
             
             if "ports" in service:
-                return f"service '{service_name}' Not Allowed To Map Ports" , None , None
+                return f"service '{service_name}' Not Allowed To Map Ports" , None , None, None
 
             if "volumes" in service:
                 paths = service["volumes"]
@@ -312,14 +267,14 @@ def validate_docker_compose(project_path, username, container_name):
                     parts = path.split(":")
                     host_path = parts[0].strip()
                     if ".." in host_path or host_path.startswith("/") or host_path.startswith("~"):
-                        return f"Invalid volume path '{host_path}'. Use relative paths starting with './' only." , None , None
+                        return f"Invalid volume path '{host_path}'. Use relative paths starting with './' only." , None , None, None
         
                     if not host_path.startswith("./"):
-                        return f"Volume path '{host_path}' must be relative (start with './')" , None , None
+                        return f"Volume path '{host_path}' must be relative (start with './')" , None , None, None
             
-            value_img = service.get("image", "")
+            value_img = img_name.lower()
             if "mysql" in value_img or "postgres" in value_img or "mariadb" in value_img: 
-                return f"service '{service_name}' is Database (Not Allowed) Please Connect Your Database" , None , None
+                return f"service '{service_name}' is Database (Not Allowed) Please Connect Your Database" , None , None, None
 
             if "labels" in service:
                 service["labels"] = {"user": username,"container": container_name}
@@ -331,7 +286,7 @@ def validate_docker_compose(project_path, username, container_name):
             else:
                 allowed_restarts = "unless-stopped"
                 if service["restart"] != allowed_restarts:
-                    return f"service '{service_name}' has invalid restart policy. Allowed values are: {allowed_restarts}" , None , None
+                    return f"service '{service_name}' has invalid restart policy. Allowed values are: {allowed_restarts}" , None , None, None
 
             if "networks" in service:
                 nets = service["networks"]
@@ -339,152 +294,36 @@ def validate_docker_compose(project_path, username, container_name):
                 if isinstance(nets, list):
                     for n in nets:
                         if n != "lan-net":
-                            return f"service '{service_name}' must use lan-net only" , None , None
+                            return f"service '{service_name}' must use lan-net only" , None , None, None
 
                 elif isinstance(nets, dict):
                     for n in nets.keys():
                         if n != "lan-net":
-                            return f"service '{service_name}' must use lan-net only" , None , None
+                            return f"service '{service_name}' must use lan-net only" , None , None, None
 
         if not main_service_found:
-            return f"Main service '{container_name}' not found in docker-compose.yml. Please ensure the service name matches your main service." , None , None
+            return f"Main service '{container_name}' not found in docker-compose.yml. Please ensure the service name matches your main service." , None , None, None
 
         if "networks" not in compose:
-            return "docker-compose.yml must define networks" , None , None
+            return "docker-compose.yml must define networks" , None , None, None
 
         networks = compose["networks"]
         if "lan-net" not in networks:
-                return "lan-net network must be defined" , None , None
+            return "lan-net network must be defined" , None , None, None
 
         if not networks["lan-net"].get("external"):
-                return "lan-net must be external network" , None , None
+            return "lan-net must be external network" , None , None, None
         
         try:
             with open(compose_file, "w") as f:
                 yaml.safe_dump(compose, f, default_flow_style=False, sort_keys=False)
         except Exception as e:
-            return f"Failed to save updated docker-compose file: {str(e)}" , None , None
+            return f"Failed to save updated docker-compose file: {str(e)}" , None , None, None
 
-        return True, value_container, services
-
-    except Exception as e:
-        return f"Error processing docker-compose.yml: {str(e)}", None, None
-    finally:
-        if conn:
-            conn.close()
-
-# Run Dcoker Compose Project with Optional Down for Updates, Capture Logs, and user -p for create name stack
-def run_docker_project(project_path, docker_project_name, action):
-    down_log_content = (
-        f"------------[DOWN LOGS]------------ \n\n"
-        f"[CMD]:\n  - None - \n\n\n"
-        f"[STDOUT]:\n   - None -\n\n\n"
-        f"[STDERR]:\n   - None -\n"
-    )
-    up_log_content = ""
-    full_log_all = ""
-    try:
-        if action == "UPDATE":
-            down_cmd = ["docker", "compose", "-p", docker_project_name, "down", "--remove-orphans"]
-            down = subprocess.run(down_cmd, cwd=project_path, capture_output=True, text=True, timeout=300)
-            down_log_content = ( 
-                f"------------[DOWN LOGS]------------ \n\n"
-                f"[CMD]:\n  {down.args}\n\n\n"
-                f"[STDOUT]:\n   {down.stdout if down.stdout.strip() else '- None -'}\n\n\n"
-                f"[STDERR]:\n   {down.stderr if down.stderr.strip() else '- None -'}\n")
-
-        cmd = ["docker", "compose", "-p", docker_project_name, "up", "-d", "--build"]
-        result = subprocess.run(cmd, cwd=project_path, capture_output=True, text=True, timeout=300)
-        up_log_content = (
-            f"------------[UP LOGS]------------ \n\n"
-            f"[CMD]:\n  {result.args}\n\n\n"
-            f"[STDOUT]:\n   {result.stdout if result.stdout.strip() else '- None -'}\n\n\n"
-            f"[STDERR]:\n   {result.stderr if result.stderr.strip() else '- None -'}\n")
-        
-
-        full_log_all = f"{down_log_content} \n\n {up_log_content}"
-        if result.returncode == 0:
-            return True, full_log_all
-        else:
-            return False, full_log_all
-
-    except subprocess.TimeoutExpired:
-        error_msg = "\n\n[CRITICAL ERROR]: Deployment Timed Out (Process took too long)"
-        full_log_all = f"{down_log_content}{up_log_content}{error_msg}"
-        return False, full_log_all
-    except Exception as e:
-        error_msg = f"\n\n[CRITICAL ERROR]: {str(e)}"
-        full_log_all = f"{down_log_content}{up_log_content}{error_msg}"
-        return False, full_log_all
-
-# Function to update system after validating docker-compose, running project, updating database, and logging activity with full logs
-def update_system_docker(username, value_container, container_name, port, domain, full_log, project_path, project_type, services, domain_name, is_run, action, npm_id):
-    conn = None
-    status = ""
-    full_c_name = ""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM users WHERE username =  %s",(username,))
-        user_data = cursor.fetchone()
-        if not user_data:
-            return False, f"User '{username}' not found"
-
-        user_id = user_data['id']
-        diff_usage = 0
-
-        LIMIT_SIZE = 60000
-        if len(full_log) > LIMIT_SIZE:
-            head = full_log[:20000]
-            tail = full_log[-40000:]
-            full_log = f"{head}\n\n REMOVE LOGS: {len(full_log) - LIMIT_SIZE} CHARACTERS \n\n{tail}"
-
-        if not is_run:
-            full_c_name = f"{username}_{container_name}_FAILED"
-            cursor.execute("INSERT INTO activity_logs (user_id, username, container_name, action, status, details) VALUES (%s, %s, %s, %s, %s, %s)",(user_id, username, full_c_name, action, "FAILED", full_log))
-            
-            conn.commit()
-            return False, "Deployment Failed. Logs saved"
-
-        if action == "UPDATE":
-            cursor.execute("SELECT COUNT(*) as count FROM containers WHERE owner=%s AND project_path=%s", (username, project_path))
-            result = cursor.fetchone()
-            old_stack_count = 0
-            if not result:
-                old_stack_count = 0
-            else:
-                old_stack_count = result['count']
-                
-            diff_usage = int(value_container) - old_stack_count
-
-            cursor.execute("DELETE FROM containers WHERE owner=%s AND project_path=%s",(username, project_path))
-        else:
-            diff_usage = int(value_container)
-        
-        cursor.execute("UPDATE users SET container = GREATEST(0, CAST(container AS SIGNED) + %s) WHERE username = %s", (diff_usage, username))
-
-        for service_name in services.keys():
-            status = "running"
-            full_c_name = f"{username}_{container_name}_{service_name}"
-            path = f"{project_path}"
-            
-
-            if service_name == container_name:
-                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, int(npm_id), full_c_name, status, port, domain, path, project_type, True))
-            else:
-                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, None, full_c_name, status, None, "", path, project_type, True))
-        
-        cursor.execute("INSERT INTO activity_logs (user_id, username, container_name, action, status, details) VALUES (%s, %s, %s, %s, %s, %s)", (user_id, username, full_c_name, action, "SUCCESS", full_log))
-
-        conn.commit()
-        return True, "System Updated Successfully"
+        return True, value_container, services, img_names_dict
 
     except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"DB Update Error: {e}")
-        return False, str(e)
+        return f"Error processing docker-compose.yml: {str(e)}", None, None , None
     finally:
         if conn:
             conn.close()
@@ -1198,6 +1037,7 @@ def upload():
     raw_save_path = os.getenv("BASE_PATH")
     if not raw_save_path:
         return jsonify({"error": "BASE_PATH not set in .env"}), 500
+        
     path_to_clean_folder = None
     path_to_clean_zip = None
     task_started = False
@@ -1256,7 +1096,7 @@ def upload():
                 if not os.path.exists(compose):
                     return jsonify({"error": f"Project '{container_name}' Not Found Cannot Deploy Plese Check Service Name"}), 400
 
-                validate_result, value_container, services = validate_docker_compose(full_path_floder, username, container_name)
+                validate_result, value_container, services, img_names_dict = validate_docker_compose(full_path_floder, username, container_name)
 
                 if validate_result != True:
                     shutil.rmtree(full_path_floder)
@@ -1267,7 +1107,7 @@ def upload():
                 docker_project_name = f"{username}_{container_name}"
 
                 from tasks import docker_deploy
-                task = docker_deploy.delay(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, value_container)
+                task = docker_deploy.delay(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, value_container)
                 task_started = True
                 
                 return jsonify({"message": f"Deploying Project '{container_name}' Wait for Background Task", "task_id": task.id}), 200
@@ -1312,7 +1152,7 @@ def upload():
                     if not os.path.exists(os.path.join(new_full_path_floder, "docker-compose.yml")):
                         return jsonify({"error": "docker-compose.yml Not Found in Update Zip"}), 400
 
-                    validate_result, value_container, services = validate_docker_compose(new_full_path_floder, username, container_name)
+                    validate_result, value_container, services, img_names_dict = validate_docker_compose(new_full_path_floder, username, container_name)
                     if validate_result != True:
                         shutil.rmtree(new_full_path_floder)
                         os.remove(new_full_path)
@@ -1322,7 +1162,7 @@ def upload():
                     npm_id = domain_exists["npm_id"]
 
                     from tasks import docker_update
-                    task = docker_update.delay(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, npm_id, value_container)
+                    task = docker_update.delay(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, npm_id, value_container)
                     task_started = True
 
                     return jsonify({"message": f"Updating Project '{container_name}' Wait for Background Task", "task_id": task.id}), 200

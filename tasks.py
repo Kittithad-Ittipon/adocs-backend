@@ -1,20 +1,35 @@
-from celery import Celery
-import subprocess
-import pymysql
+# pthon built-in modules
 import os
-from dotenv import load_dotenv
-import requests
-import shutil
+import subprocess
 import time
-from dbutils.pooled_db import PooledDB
+import shutil
 
+# pip install modules
+
+# tesk queue and async tasks
+from celery import Celery
+
+# database connection
+import pymysql
+
+# environment variables
+from dotenv import load_dotenv
+
+# API Requests
+import requests
+
+# Load environment variables
 basedir = os.path.abspath(os.path.dirname(__file__))
 env_path = os.path.join(basedir, '.env')
 load_dotenv(env_path)
 
+# Redis For Test Celery (localhost)
 celery_app = Celery('tasks', broker='redis://localhost:6379/1', backend='redis://localhost:6379/2')
+
+# Redis For Production (docker)
 # celery_app = Celery('tasks', broker='redis://redis-broker:6379/1', backend='redis://redis-broker:6379/2')
 
+# Database Connection With pymysql
 def get_db_connection():
     return pymysql.connect(
         host=os.getenv("DB_HOST"),
@@ -28,6 +43,7 @@ def get_db_connection():
 NPM_TOKEN = None
 NPM_EXPIRED = 0
 
+# Get NPM Token with caching for 1 hour
 def get_npm_token():
 
     global NPM_TOKEN
@@ -50,6 +66,7 @@ def get_npm_token():
         return NPM_TOKEN
     return None
 
+# NPM API Functions Add domain name
 def nginx_add_proxy(domain, container_name, port, protocol):
     token = get_npm_token()
     if not token:
@@ -90,6 +107,7 @@ def nginx_add_proxy(domain, container_name, port, protocol):
     except Exception as e:
         return False, str(e)
 
+# NPM API Functions Update domain name
 def nginx_update_proxy(npm_id, domain, container_name, port, protocol):
     token = get_npm_token()
     if not token: 
@@ -127,6 +145,7 @@ def nginx_update_proxy(npm_id, domain, container_name, port, protocol):
     except Exception as e:
         return False, f"Connection Error: {str(e)}"
 
+# NPM API Functions Delete domain name
 def nginx_delete_proxy(npm_id):
     if not npm_id:
         return True, "No NPM ID"
@@ -151,7 +170,7 @@ def nginx_delete_proxy(npm_id):
     except Exception as e:
         return False, f"Connection Error: {str(e)}"
 
-def run_docker_project(project_path, docker_project_name, action):
+# Run Docker Compose Project with subprocess and capture logs
     down_log_content = (
         f"------------[DOWN LOGS]------------ \n\n"
         f"[CMD]:\n  - None - \n\n\n"
@@ -194,7 +213,8 @@ def run_docker_project(project_path, docker_project_name, action):
         full_log_all = f"{down_log_content}{up_log_content}{error_msg}"
         return False, full_log_all
 
-def update_system_docker(username, value_container, container_name, port, domain, full_log, project_path, project_type, services, domain_name, is_run, action, npm_id):
+# Add or Update System After Docker Deployment
+def update_system_docker(username, value_container, container_name, port, domain, full_log, project_path, img_names_dict, services, domain_name, is_run, action, npm_id):
     conn = None
     status = ""
     full_c_name = ""
@@ -245,11 +265,12 @@ def update_system_docker(username, value_container, container_name, port, domain
             full_c_name = f"{username}_{container_name}_{service_name}"
             path = f"{project_path}"
             
+            current_img = img_names_dict.get(service_name, "Unknown")
 
             if service_name == container_name:
-                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, int(npm_id), full_c_name, status, port, domain, path, project_type, True))
+                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, int(npm_id), full_c_name, status, port, domain, path, current_img, True))
             else:
-                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, None, full_c_name, status, None, "", path, project_type, True))
+                cursor.execute("INSERT INTO containers (user_id, owner, npm_id, container_name, status, port_internal, domain, project_path, type, publish) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", (user_id, username, None, full_c_name, status, None, "", path, current_img, True))
         
         cursor.execute("INSERT INTO activity_logs (user_id, username, container_name, action, status, details) VALUES (%s, %s, %s, %s, %s, %s)", (user_id, username, full_c_name, action, "SUCCESS", full_log))
 
@@ -265,6 +286,7 @@ def update_system_docker(username, value_container, container_name, port, domain
         if conn:
             conn.close()
 
+# Celery Tasks is "docker_start_stop" for start and stop container 
 @celery_app.task()
 def docker_start_stop(result_action, folder_name, project_path, docker_project_name, cmd, username, log_id):
     conn = get_db_connection()
@@ -308,7 +330,7 @@ def docker_start_stop(result_action, folder_name, project_path, docker_project_n
         if conn:
             conn.close()
 
-
+# Celery Tasks is "docker_delstack" for delete stack and all containers in stack with remove proxy from NPM and delete folder and files
 @celery_app.task()
 def docker_delstack(project_path, docker_project_name, folder_name, username, user_id, container_list, container_value, container_user_data, log_id):
     msg_npm = "- None -"
@@ -386,6 +408,7 @@ def docker_delstack(project_path, docker_project_name, folder_name, username, us
         if conn:
             conn.close()
 
+# Celery Tasks is "docker_deluser" for delete user and all associated data with remove proxy from NPM and delete folder and files and drop database and user from MySQL
 @celery_app.task()
 def docker_deluser(username, container_user_data, db_name, all_docker_logs, id_users, username_token, log_id):
     processed_paths = set()
@@ -456,15 +479,16 @@ def docker_deluser(username, container_user_data, db_name, all_docker_logs, id_u
         if conn:
             conn.close()
 
+# Celery Tasks is "docker_deploy" for deploy docker compose project with create proxy in NPM and save all data in database and if any error happen remove proxy from NPM and delete folder and files and save logs in database
 @celery_app.task()
-def docker_deploy(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, value_container):
+def docker_deploy(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, value_container):
     try:
         is_run , logs = run_docker_project(full_path_floder, docker_project_name, action)
         if not is_run:
             shutil.rmtree(full_path_floder)
             os.remove(full_path)
             logs += "\n\n[CRITICAL ERROR]: Deployment Failed"
-            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, project_type, services, domain_name, False, action, None)
+            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, img_names_dict, services, domain_name, False, action, None)
             return {"error": f"Deployment Failed: \n\n{logs}"}
 
         full_container_name = services[container_name]["container_name"]
@@ -473,10 +497,10 @@ def docker_deploy(full_path, full_path_floder, docker_project_name, action, user
             shutil.rmtree(full_path_floder)
             os.remove(full_path)
             logs += f"\n\n[CRITICAL ERROR]: NPM Proxy Creation Failed: {msg_npm}"
-            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, project_type, services, domain_name, False, action, msg_npm)
+            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, img_names_dict, services, domain_name, False, action, msg_npm)
             return {"error": f"NPM Proxy Creation Failed: {msg_npm}"}
 
-        result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, project_type, services, domain_name, is_run, action, msg_npm)
+        result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, full_path_floder, img_names_dict, services, domain_name, is_run, action, msg_npm)
         if not result_stat:
             try:
                 subprocess.run(["docker", "compose", "-p", docker_project_name, "down"], cwd=full_path_floder, timeout=60)
@@ -495,13 +519,14 @@ def docker_deploy(full_path, full_path_floder, docker_project_name, action, user
     except Exception as e:
         print(f"Deployment Error: {e}")
         try:
-             update_system_docker(username, value_container, container_name, port, domain, f"Deployment Error: {str(e)}", new_full_path_floder, project_type, services, domain_name, False, action, None)
+             update_system_docker(username, value_container, container_name, port, domain, f"Deployment Error: {str(e)}", full_path_floder, img_names_dict, services, domain_name, False, action, None)
         except:
             pass
         return {"error": f"Deployment Error: {str(e)}"}
 
+# Celery Tasks is "docker_update" for update docker compose project with update proxy in NPM and save all data in database and if any error happen remove proxy from NPM and delete folder and files and save logs in database
 @celery_app.task()
-def docker_update(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, project_type, services, domain_name, npm_id, value_container):
+def docker_update(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, npm_id, value_container):
     try:
         is_run , logs = run_docker_project(new_full_path_floder,docker_project_name, action)
         if not is_run:
@@ -513,7 +538,7 @@ def docker_update(new_full_path, new_full_path_floder, docker_project_name, acti
             shutil.rmtree(new_full_path_floder)
             os.remove(new_full_path)
             logs += "\n\n[CRITICAL ERROR]: Deployment Failed"
-            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, project_type, services, domain_name, False, action, npm_id)
+            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, img_names_dict, services, domain_name, False, action, npm_id)
             return {"error": f"Deployment Failed: \n\n{logs}"}
 
         status , msg_npm = nginx_update_proxy(npm_id, domain, services[container_name]["container_name"], port, "http")
@@ -521,10 +546,10 @@ def docker_update(new_full_path, new_full_path_floder, docker_project_name, acti
             shutil.rmtree(new_full_path_floder)
             os.remove(new_full_path)
             logs += f"\n\n[CRITICAL ERROR]: NPM Proxy Update Failed: {msg_npm}"
-            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, project_type, services, domain_name, False, action, npm_id)
+            result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, img_names_dict, services, domain_name, False, action, npm_id)
             return {"error": f"NPM Proxy Update Failed: {msg_npm}"}
 
-        result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, project_type, services, domain_name, is_run, action, npm_id)
+        result_stat, result_update =  update_system_docker(username, value_container, container_name, port, domain, logs, new_full_path_floder, img_names_dict, services, domain_name, is_run, action, npm_id)
         if not result_stat:
             try:
                 subprocess.run(["docker", "compose", "-p", docker_project_name, "down"], cwd=new_full_path_floder, timeout=60)
@@ -543,7 +568,7 @@ def docker_update(new_full_path, new_full_path_floder, docker_project_name, acti
     except Exception as e:
         print(f"Deployment Error: {e}")
         try:
-             update_system_docker(username, value_container, container_name, port, domain, f"Deployment Error: {str(e)}", new_full_path_floder, project_type, services, domain_name, False, action, None)
+             update_system_docker(username, value_container, container_name, port, domain, f"Deployment Error: {str(e)}", new_full_path_floder, img_names_dict, services, domain_name, False, action, None)
         except:
             pass
         return {"error": f"Deployment Error: {str(e)}"}
