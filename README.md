@@ -31,6 +31,11 @@ Mac/Linux:
 source .venv/bin/activate
 ```
 
+Quit .venv
+```bash
+deactivate
+```
+
 3. Install Dependencies
 
 ```bash
@@ -49,11 +54,11 @@ Start the Flask server with:
 python app.py
 ```
 
-2. Celery
+2. Celery (New Terminal)
 ```bash
 celery -A tasks worker --loglevel=info --pool=solo
 ```
-3. Redis
+3. Redis (Docker or Docker Desktop)
 ```bash
 docker run -d --name redis-server -p 6379:6379 redis
 ```

@@ -24,10 +24,10 @@ env_path = os.path.join(basedir, '.env')
 load_dotenv(env_path)
 
 # Redis For Test Celery (localhost)
-celery_app = Celery('tasks', broker='redis://localhost:6379/1', backend='redis://localhost:6379/2')
+# celery_app = Celery('tasks', broker='redis://localhost:6379/1', backend='redis://localhost:6379/2')
 
 # Redis For Production (docker)
-# celery_app = Celery('tasks', broker='redis://redis-broker:6379/1', backend='redis://redis-broker:6379/2')
+celery_app = Celery('tasks', broker='redis://redis-broker:6379/1', backend='redis://redis-broker:6379/2')
 
 # Database Connection With pymysql
 def get_db_connection():
