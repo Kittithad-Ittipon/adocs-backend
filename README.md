@@ -2,6 +2,7 @@
 
 - Python 3.x
 - pip
+- Docker or Docker Desktop
 
 ## Installation & Setup
 
