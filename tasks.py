@@ -23,7 +23,8 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 env_path = os.path.join(basedir, '.env')
 load_dotenv(env_path)
 
-# Redis For Test Celery (localhost)
+# Redis For Test Celery (localhost) Run Redis First!
+# Use Docker Desktop : docker run -d --name redis-server -p 6379:6379 redis
 celery_app = Celery('tasks', broker='redis://localhost:6379/1', backend='redis://localhost:6379/2')
 
 # Redis For Production (docker)

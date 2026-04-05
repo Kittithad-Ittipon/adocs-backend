@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 from flask_mail import Mail, Message
 import requests
 import yaml
+import psutil
 
 # 2.5 Background Tasks 
 from celery.result import AsyncResult 
@@ -177,6 +178,12 @@ def unzip_here(zip_path, target_dir):
 
 # Function to validate docker-compose.yml file and check user quota before deployment
 def validate_docker_compose(project_path, username, container_name):
+    ram = psutil.virtual_memory()
+    MAX_RAM_PERCENT = 85.0 
+    if ram.percent > MAX_RAM_PERCENT:
+        available_gb = ram.available / (1024 ** 3)
+        return f"Server is at capacity (RAM usage: {ram.percent}%). Only {available_gb:.2f} GB available. Please try again later.", None, None, None
+
     conn = None
     img_names_dict = {}
     try:
@@ -329,10 +336,10 @@ def validate_docker_compose(project_path, username, container_name):
             conn.close()
 
 # API Endpoint to Check Celery Task Status and Return Logs or Errors
-@app.route("/api/task_status/<task_id>", methods=["GET"])
+@app.route("/api/task-status/<taskID>", methods=["GET"])
 @jwt_required()
-def get_task_status(task_id):
-    task = celery_app.AsyncResult(task_id)
+def get_task_status(taskID):
+    task = celery_app.AsyncResult(taskID)
 
     if task.state in ['PENDING', 'STARTED']:
         return jsonify({"message": "working"}), 202
@@ -355,7 +362,7 @@ def register():
     username = data.get("username")
     email = data.get("email")
     password = data.get("password")
-    create_db = data.get("create_db")
+    create_db = data.get("dbState")
     conn = None
 
     try:
@@ -433,7 +440,7 @@ def login():
 
             return (
                 jsonify(
-                    {"message": "Login Success", "token": token, "role": role}
+                    {"message": "Login Success", "token": token}
                 ),
                 200,
             )
@@ -483,6 +490,7 @@ def dashboard_data():
                     "user_upload_total": user_upload_total["total"],
                     "max_containers": user_data["max_containers"],
                     "container_used": user_data["container"],
+                    "role": user_data["role"],
                 }
             ),
             200,
@@ -497,7 +505,7 @@ def dashboard_data():
             conn.close()
 
 # API Endpoint for Changing User Password with Current Password Verification, Optional Database Password Update, and Role-Based Access Control
-@app.route("/api/repassword", methods=["POST"])
+@app.route("/api/re-password", methods=["POST"])
 @jwt_required()
 def re_password():
     data = get_jwt()
@@ -535,16 +543,16 @@ def re_password():
             conn.close()
 
 # API Endpoint for Changing User's Maximum Container Limit with Validation, Optional Database Creation/Deletion
-@app.route("/api/maxcontainer", methods=["POST"])
+@app.route("/api/users-edit", methods=["POST"])
 @jwt_required()
 def max_container():
     data_token = get_jwt()
     username_token = data_token["username"]
     role_token = data_token["role"]
     data = request.json
-    username = data["user"]
-    max_containers = data["max_containers"]
-    db_mode = data["db_mode"]
+    username = data["userName"]
+    max_containers = data["maxContainers"]
+    db_mode = data["useDB"]
     conn = None
     try:
         conn = get_db_connection()
@@ -603,7 +611,7 @@ def max_container():
             conn.close()
 
 # API Endpoint for Deleting User Account with Role-Based Access Control, Optional Database Deletion, Docker Container Cleanup, and Activity Logging with Full Logs
-@app.route("/api/deluser", methods=["POST"])
+@app.route("/api/del-user", methods=["POST"])
 @jwt_required()
 def deluser():
     data_token = get_jwt()
@@ -611,7 +619,7 @@ def deluser():
     username_token = data_token["username"]
     role_token = data_token["role"]
     data = request.json
-    username = data["user_del"]
+    username = data["username"]
     conn = None
     n = 0
 
@@ -647,7 +655,7 @@ def deluser():
         from tasks import docker_deluser
         task = docker_deluser.delay(username, container_user_data, db_name, all_docker_logs, id_users, username_token, log_id)
 
-        return jsonify({"message": "Delete Success", "task_id": task.id}), 200
+        return jsonify({"message": "Delete Success", "taskID": task.id}), 200
     except Exception as e:
         if conn:
             conn.rollback()
@@ -697,13 +705,13 @@ def logs():
         cursor = conn.cursor()
         
         if role == "admin":
-            cursor.execute("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 150")
+            cursor.execute("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 200")
             logs_data = cursor.fetchall()
             if not logs_data:
                 return jsonify({"error": "No Logs Data"}) , 401
             return jsonify(logs_data) , 200
         elif role == "user":
-            cursor.execute("SELECT * FROM activity_logs WHERE username = %s ORDER BY created_at DESC LIMIT 50",(username,))
+            cursor.execute("SELECT * FROM activity_logs WHERE username = %s ORDER BY created_at DESC LIMIT 100",(username,))
             logs_data = cursor.fetchall()
             if not logs_data:
                 return jsonify({"error": "No Logs Data"}) , 401
@@ -718,7 +726,7 @@ def logs():
             conn.close()
 
 # API Endpoint to Fetch Container Data for the Logged-In User with Role-Based Access Control
-@app.route("/api/container_data", methods=["GET"])
+@app.route("/api/containers-data", methods=["GET"])
 @jwt_required()
 def container_data():
     conn = None
@@ -744,7 +752,7 @@ def container_data():
             conn.close()
 
 # API Endpoint to Fetch Active and Published Container Data
-@app.route("/api/active_site", methods=["GET"])
+@app.route("/api/active-site", methods=["GET"])
 def active_site():
     conn = None
     try:
@@ -811,7 +819,7 @@ def forgot():
             conn.close()
 
 # API Endpoint for Resetting Password Using OTP with JWT Validation, Optional Database Password Update
-@app.route("/api/forgot_repassword", methods=["POST"])
+@app.route("/api/forgot-repassword", methods=["POST"])
 @jwt_required()
 def forgot_repassword():
     conn = None
@@ -820,7 +828,7 @@ def forgot_repassword():
         data_token = get_jwt()
         username_token = get_jwt_identity()
         otp_token = data_token["otp"]
-        otp = data["otp"]
+        otp = data["otpValue"]
         password = data["password"]
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -851,7 +859,7 @@ def forgot_repassword():
             conn.close()
 
 # API Endpoint for Requesting Database Access Change request database = 1
-@app.route("/api/req_db", methods=["POST"])
+@app.route("/api/req-db", methods=["POST"])
 @jwt_required()
 def req_db():
     conn = None
@@ -859,7 +867,7 @@ def req_db():
         data_token = get_jwt()
         username = data_token["username"]
         data = request.json
-        req_db = data["req_db"]
+        req_db = data["requestDB"]
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -886,7 +894,7 @@ def req_db():
             conn.close()
 
 # API Endpoint for updating Container Port and Publish Status
-@app.route("/api/portupdate", methods=["POST"])
+@app.route("/api/containers-update", methods=["POST"])
 @jwt_required()
 def port_update():
     conn = None
@@ -896,8 +904,8 @@ def port_update():
         data = request.json
         port = data["port"]
         container_name = data["containerName"]
-        protocol = data["type"]
-        pub = data["pub"]
+        protocol = data["protocol"]
+        pub = data["publish"]
         conn = get_db_connection()
         cursor = conn.cursor()
 
@@ -963,7 +971,7 @@ def port_update():
             conn.close()
 
 # API Endpoint for Deleting a Stack with Pending Status Check, Docker Container Cleanup, Database Update, and Activity Logging with Full Logs
-@app.route("/api/delstack", methods=["POST"])
+@app.route("/api/delete-containers", methods=["POST"])
 @jwt_required()
 def del_stack():
     conn = None
@@ -973,7 +981,7 @@ def del_stack():
         data_token = get_jwt()
         username = data_token["username"]
         data = request.json
-        project_path = data["stack"]
+        project_path = data["projectPath"]
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
@@ -1018,7 +1026,7 @@ def del_stack():
         from tasks import docker_delstack
         task = docker_delstack.delay(project_path, docker_project_name, folder_name, username, user_id, container_list, container_value, container_user_data, log_id)
 
-        return jsonify({"message": "Stack deleted successfully", "task_id": task.id}), 200
+        return jsonify({"message": "Stack deleted successfully", "taskID": task.id}), 200
     
     except Exception as e:
         if conn:
@@ -1047,13 +1055,12 @@ def upload():
         data_token = get_jwt()
         username = data_token["username"]
         file = request.files["file"]
-        raw_container_name = request.form.get("container_name")
+        raw_container_name = request.form.get("serviceName")
         container_name = secure_filename(raw_container_name)
         port = request.form.get("port")
         domain_name = request.form.get("domain")
         domain = f"{domain_name}.addp.site"
-        project_type = request.form.get("type")
-        newfile = request.form.get("newfile")
+        newfile = request.form.get("uploadType")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM containers WHERE domain = %s",(domain,))
@@ -1062,7 +1069,7 @@ def upload():
         if not domain_exists:
             domain_exists = None
         
-        if newfile == "set_new_file" and domain_exists is not None:
+        if newfile == "deploy" and domain_exists is not None:
             return jsonify({"error": "Domain Already Exists Please Use Other Domain"}), 400
 
 
@@ -1075,7 +1082,7 @@ def upload():
         if not ext == ".zip":
             return jsonify({"error": ".zip File Only"}), 401
 
-        if newfile == "set_new_file":
+        if newfile == "deploy":
             action = "DEPLOY"
             new_filename = f"{container_name}{ext}"
             full_path = os.path.abspath(os.path.join(user_path, new_filename))
@@ -1109,8 +1116,8 @@ def upload():
                 from tasks import docker_deploy
                 task = docker_deploy.delay(full_path, full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, value_container)
                 task_started = True
-                
-                return jsonify({"message": f"Deploying Project '{container_name}' Wait for Background Task", "task_id": task.id}), 200
+                print(task.id)
+                return jsonify({"message": f"Deploying Project '{container_name}' Wait for Background Task", "taskID": task.id}), 200
 
             except Exception as e:
                 print("Fetch Data Error:", e)
@@ -1123,7 +1130,7 @@ def upload():
 
                 return jsonify({"error": f"Extract or Deploy failed: {str(e)}"}), 500
 
-        elif newfile == "":
+        elif newfile == "update":
             action = "UPDATE"
             
             if domain_exists is None:
@@ -1165,7 +1172,7 @@ def upload():
                     task = docker_update.delay(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, npm_id, value_container)
                     task_started = True
 
-                    return jsonify({"message": f"Updating Project '{container_name}' Wait for Background Task", "task_id": task.id}), 200
+                    return jsonify({"message": f"Updating Project '{container_name}' Wait for Background Task", "taskID": task.id}), 200
 
                 except Exception as e:
                     print("Fetch Data Error:", e)
@@ -1206,7 +1213,7 @@ def upload():
             conn.close()
 
 # API Endpoint for Start Stop Container
-@app.route("/api/status_container", methods=["POST"])
+@app.route("/api/control-containers", methods=["POST"])
 @jwt_required()
 def status_container():
     conn = None
@@ -1216,8 +1223,8 @@ def status_container():
         data_token = get_jwt()
         username = data_token["username"]
         data = request.json
-        project_path = data.get("stack")
-        action = data.get("status")
+        project_path = data.get("projectPath")
+        action = data.get("containerStatus")
 
         if not project_path or not action:
             return jsonify({"error": "Missing stack path or status"}), 400
@@ -1265,7 +1272,7 @@ def status_container():
         from tasks import docker_start_stop
         task = docker_start_stop.delay(result_action, folder_name, project_path, docker_project_name, cmd, username, log_id)
 
-        return jsonify({"message": f"Container {result_action} Pending", "task_id": task.id }), 200
+        return jsonify({"message": f"Container {result_action} Pending", "taskID": task.id }), 200
 
     except Exception as e:
         if conn:
