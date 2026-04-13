@@ -99,7 +99,8 @@ def get_rate_limit_key():
 limiter = Limiter(
     key_func=get_rate_limit_key,
     app=app,
-    storage_uri="redis://localhost:6379/3",
+    storage_uri="redis://redis-broker:6379/3",  # Use Redis Production Database for Rate Limiting
+    # storage_uri="redis://localhost:6379/3",  # Use Redis Development Database for Rate Limiting
 )
 # Function to get a database connection from the pool
 def get_db_connection():
