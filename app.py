@@ -14,8 +14,10 @@ from flask import Flask, jsonify, request, render_template
 from werkzeug.utils import secure_filename
 
 # 2.2 Security and Authentication
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt, verify_jwt_in_request
+from flask_jwt_extended.exceptions import JWTExtendedException
 from flask_bcrypt import Bcrypt
+from flask_limiter import Limiter
 
 # 2.3 Database Management
 import pymysql
@@ -76,6 +78,29 @@ POOL = PooledDB(
     connect_timeout=5,  # Connection timeout in seconds
 )
 
+# Rate Limiting Setup Response for Too Many Requests
+@app.errorhandler(429)
+def ratelimit_handler(e):
+    return jsonify({"error": f"Too Many Requests {e.description}"}), 429
+
+def get_rate_limit_key():
+    try:
+        verify_jwt_in_request(optional=True) 
+        identity = get_jwt_identity()
+        if identity:
+            return identity
+    except JWTExtendedException:
+        pass 
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if forwarded_for:
+        return f"ip:{forwarded_for.split(',')[0].strip()}"
+    return f"ip:{request.remote_addr}"
+
+limiter = Limiter(
+    key_func=get_rate_limit_key,
+    app=app,
+    storage_uri="redis://localhost:6379/3",
+)
 # Function to get a database connection from the pool
 def get_db_connection():
     return POOL.connection()
@@ -339,9 +364,9 @@ def validate_docker_compose(project_path, username, container_name):
         if conn:
             conn.close()
 
-
 # API Endpoint for User Login, JWT Token Generation
 @app.route("/api/auth/login", methods=["POST"])
+@limiter.limit("5 per minute")
 def login():
     data = request.json
     username = data.get("username")
@@ -398,6 +423,7 @@ def login():
 
 # API Endpoint for Forgot Password Functionality with OTP Generation, Email Sending, and JWT Token Creation for OTP Validation
 @app.route("/api/auth/forgot", methods=["POST"])
+@limiter.limit("3 per hour")
 def forgot():
     conn = None
     try:
@@ -443,6 +469,7 @@ def forgot():
 
 # API Endpoint for Resetting Password Using OTP with JWT Validation, Optional Database Password Update
 @app.route("/api/auth/reset", methods=["PATCH"])
+@limiter.limit("3 per hour")
 @jwt_required()
 def forgot_repassword():
     conn = None
@@ -486,6 +513,7 @@ def forgot_repassword():
 # API Endpoint to Fetch Container Data for the Logged-In User with Role-Based Access Control
 @app.route("/api/containers", methods=["GET"])
 @jwt_required()
+@limiter.limit("20 per minute")
 def container_data():
     conn = None
     try:
@@ -514,6 +542,7 @@ def container_data():
 # and Handling Both New Deployments and Updates with Full Cleanup on Failure
 @app.route("/api/containers", methods=["POST"])
 @jwt_required()
+@limiter.limit("5 per minute")
 def upload():
     conn = None
     raw_save_path = os.getenv("BASE_PATH")
@@ -644,8 +673,7 @@ def upload():
                     npm_id = domain_exists["npm_id"]
 
                     from tasks import docker_update
-                    task = docker_update.delay(new_full_path, new_full_path_floder, docker_project_name, action, username,
-                                               container_name, port, domain, img_names_dict, services, domain_name, npm_id, value_container)
+                    task = docker_update.delay(new_full_path, new_full_path_floder, docker_project_name, action, username, container_name, port, domain, img_names_dict, services, domain_name, npm_id, value_container)
                     task_started = True
 
                     return jsonify({"message": f"Updating Project '{container_name}' Wait for Background Task", "taskID": task.id}), 200
@@ -690,6 +718,7 @@ def upload():
 
 # API Endpoint to Fetch Active and Published Container Data
 @app.route("/api/containers/active", methods=["GET"])
+@limiter.limit("25 per minute")
 def active_site():
     conn = None
     try:
@@ -715,6 +744,7 @@ def active_site():
 # API Endpoint for updating Container Port and Publish Status
 @app.route("/api/containers/<projectName>", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def port_update(projectName):
     conn = None
     try:
@@ -792,6 +822,7 @@ def port_update(projectName):
 # API Endpoint for Deleting a Stack with Pending Status Check, Docker Container Cleanup, Database Update, and Activity Logging with Full Logs
 @app.route("/api/containers/<projectName>", methods=["DELETE"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def del_stack(projectName):
     conn = None
     container_list = []
@@ -859,6 +890,7 @@ def del_stack(projectName):
 # API Endpoint for Start Stop Container
 @app.route("/api/containers/<projectName>/status", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def status_container(projectName):
     conn = None
     cmd = []
@@ -930,6 +962,7 @@ def status_container(projectName):
 # API Endpoint to Fetch Dashboard Data Including User Info, Total Users, Container Usage, and Activity Logs with Role-Based Access Control
 @app.route("/api/dashboard", methods=["GET"])
 @jwt_required()
+@limiter.limit("15 per minute")
 def dashboard_data():
     try:
         data = get_jwt()
@@ -980,6 +1013,7 @@ def dashboard_data():
 # API Endpoint to Fetch Activity Logs with Role-Based Access Control for Admins (All Logs) and Users (Own Logs Only)
 @app.route("/api/logs", methods=["GET"])
 @jwt_required()
+@limiter.limit("20 per minute")
 def logs():
     conn = None
     try:
@@ -1013,6 +1047,7 @@ def logs():
 # API Endpoint to Check Celery Task Status and Return Logs or Errors
 @app.route("/api/task-status/<taskID>", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def get_task_status(taskID):
     task = celery_app.AsyncResult(taskID)
 
@@ -1032,6 +1067,7 @@ def get_task_status(taskID):
 
 # API Endpoint for User Registration with Optional Database Creation, Password Hashing
 @app.route("/api/users", methods=["POST"])
+@limiter.limit("5 per minute")
 def register():
     data = request.json
     username = data.get("username")
@@ -1078,6 +1114,7 @@ def register():
 # API Endpoint to Fetch All Users with Role-Based Access Control for Admins Only
 @app.route("/api/users", methods=["GET"])
 @jwt_required()
+@limiter.limit("10 per minute")
 def users_table():
     conn = None
     try:
@@ -1105,6 +1142,7 @@ def users_table():
 # API Endpoint to Fetch Profile Data Including User Info, Total Users, Container Usage, and Activity Logs with Role-Based Access Control
 @app.route("/api/users/profile", methods=["GET"])
 @jwt_required()
+@limiter.limit("15 per minute")
 def profile_data():
     try:
         data = get_jwt()
@@ -1155,6 +1193,7 @@ def profile_data():
 # API Endpoint for Changing User Password with Current Password Verification, Optional Database Password Update, and Role-Based Access Control
 @app.route("/api/users/<userName>/password", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def re_password(userName):
     data = get_jwt()
     username = data["username"]
@@ -1193,6 +1232,7 @@ def re_password(userName):
 # API Endpoint for Requesting Database Access Change request database = 1
 @app.route("/api/users/<userName>/requestDB", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def req_db(userName):
     conn = None
     try:
@@ -1228,6 +1268,7 @@ def req_db(userName):
 # API Endpoint for Deleting User Account with Role-Based Access Control, Optional Database Deletion, Docker Container Cleanup, and Activity Logging with Full Logs
 @app.route("/api/users/<userName>", methods=["DELETE"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def deluser(userName):
     data_token = get_jwt()
     id_users = get_jwt_identity()
@@ -1282,6 +1323,7 @@ def deluser(userName):
 # API Endpoint for Changing User's Maximum Container Limit with Validation, Optional Database Creation/Deletion
 @app.route("/api/users/<userName>", methods=["PATCH"])
 @jwt_required()
+@limiter.limit("3 per minute")
 def max_container(userName):
     data_token = get_jwt()
     username_token = data_token["username"]
