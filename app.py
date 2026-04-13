@@ -1046,7 +1046,7 @@ def logs():
             conn.close()
 
 # API Endpoint to Check Celery Task Status and Return Logs or Errors
-@app.route("/api/task-status/<taskID>", methods=["GET"])
+@app.route("/api/tasks/<taskID>", methods=["GET"])
 @jwt_required()
 @limiter.limit("30 per minute")
 def get_task_status(taskID):
