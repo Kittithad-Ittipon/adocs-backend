@@ -488,7 +488,7 @@ def forgot_repassword():
         user_data = cursor.fetchone()
 
         if otp_token != otp:
-            return jsonify({"error": "Wrong OTP Please Chack Your Mail!"}), 401
+            return jsonify({"error": "Wrong OTP Please Check Your Mail!"}), 401
 
         hashed = bcrypt.generate_password_hash(password).decode()
         cursor.execute(
@@ -595,7 +595,7 @@ def upload():
             path_to_clean_folder = full_path_floder
 
             if os.path.exists(full_path) or os.path.exists(full_path_floder):
-                return jsonify({"error": f"Project '{container_name}' Already Exists Plese Change Service Name"}), 400
+                return jsonify({"error": f"Project '{container_name}' Already Exists Please Change Service Name"}), 400
 
             file.save(full_path)
 
@@ -604,7 +604,7 @@ def upload():
 
                 compose = os.path.join(full_path_floder, "docker-compose.yml")
                 if not os.path.exists(compose):
-                    return jsonify({"error": f"Project '{container_name}' Not Found Cannot Deploy Plese Check Service Name"}), 400
+                    return jsonify({"error": f"Project '{container_name}' Not Found Cannot Deploy Please Check Service Name"}), 400
 
                 validate_result, value_container, services, img_names_dict = validate_docker_compose(
                     full_path_floder, username, container_name)
@@ -651,7 +651,7 @@ def upload():
 
             compose = os.path.join(new_full_path_floder, "docker-compose.yml")
             if not os.path.exists(compose):
-                return jsonify({"error": f"Project '{container_name}' Not Found Cannot Update Plese Check Service Name"}), 400
+                return jsonify({"error": f"Project '{container_name}' Not Found Cannot Update Please Check Service Name"}), 400
 
             if os.path.exists(new_full_path) or os.path.exists(new_full_path_floder):
                 file.save(new_full_path)
@@ -689,7 +689,7 @@ def upload():
 
                     return jsonify({"error": f"Extract or Deploy failed: {str(e)}"}), 500
             else:
-                return jsonify({"error": f"Project '{container_name}' Not Found Cannot Update Plese Check Container Name"}), 400
+                return jsonify({"error": f"Project '{container_name}' Not Found Cannot Update Please Check Container Name"}), 400
         else:
             return jsonify({"error": f"Error Can't Save"}), 401
 
@@ -1212,7 +1212,7 @@ def re_password(userName):
         db = user_data["db"]
         password_verify = bcrypt.check_password_hash(password_hashed, password)
         if not password_verify:
-            return jsonify({"error": "Invaid Password Please Try Agian"}), 401
+            return jsonify({"error": "Invalid Password Please Try Again"}), 401
 
         if db and user_data["role"] == "user":
             cursor.execute("ALTER USER %s@'%%' IDENTIFIED BY %s", (username, new_password))
