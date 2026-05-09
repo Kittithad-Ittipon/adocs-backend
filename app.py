@@ -832,7 +832,7 @@ def del_stack(projectName):
         data_token = get_jwt()
         username = data_token["username"]
         data = request.json
-        project_path = projectName
+        project_path = data.get("projectPath")
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
@@ -900,7 +900,7 @@ def status_container(projectName):
         data_token = get_jwt()
         username = data_token["username"]
         data = request.json
-        project_path = projectName
+        project_path = data.get("projectPath")
         action = data.get("containerStatus")
 
         if not project_path or not action:
