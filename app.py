@@ -147,7 +147,7 @@ def nginx_update_proxy(npm_id, domain, container_name, port, protocol):
         "forward_host": container_name,
         "forward_port": int(port),
         "access_list_id": 0,
-        "certificate_id": 3,
+        "certificate_id": os.getenv("NPM_CERT_ID"),
         "ssl_forced": True,
         "caching_enabled": False,
         "block_exploits": True,
